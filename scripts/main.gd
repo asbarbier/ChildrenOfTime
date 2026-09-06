@@ -6,6 +6,7 @@ const RTSCommandControllerScript = preload("res://scripts/command_controller.gd"
 const RTSAIControllerScript = preload("res://scripts/ai_controller.gd")
 const RTSUnitFactoryScript = preload("res://scripts/unit_factory.gd")
 const RTSLineageStateScript = preload("res://scripts/lineage_state.gd")
+const RTSEncounterControllerScript = preload("res://scripts/encounter_controller.gd")
 const PRIMITIVE_HUNTER_DEFINITION: RTSUnitDefinition = preload("res://data/units/primitive_hunter.tres")
 const RIVAL_HUNTER_DEFINITION: RTSUnitDefinition = preload("res://data/units/rival_hunter.tres")
 const CARAPACE_ADAPTATION: RTSAdaptationDefinition = preload("res://data/adaptations/carapace.tres")
@@ -29,6 +30,7 @@ var navigation_manager: RTSNavigationManager
 var command_controller: RTSCommandController
 var ai_controller: RTSAIController
 var unit_factory: RTSUnitFactory
+var encounter_controller: RTSEncounterController
 var player_lineage: RTSLineageState
 var enemy_lineage: RTSLineageState
 
@@ -44,6 +46,8 @@ var adaptation_choice_made: bool = false
 
 var status_label: Label
 var adaptation_panel: PanelContainer
+var result_panel: PanelContainer
+var result_label: Label
 
 func _ready() -> void:
 	_spawn_test_obstacles()
@@ -207,6 +211,18 @@ func _build_ai_controller() -> void:
 	add_child(ai_controller)
 	ai_controller.configure(command_controller, ENEMY_TEAM_ID)
 
+func _build_encounter_controller() -> void:
+	encounter_controller = RTSEncounterControllerScript.new() as RTSEncounterController
+	encounter_controller.name = "EncounterController"
+	add_child(encounter_controller)
+	encounter_controller.encounter_finished.connect(_on_encounter_finished)
+	encounter_controller.configure(
+		PLAYER_TEAM_ID,
+		ENEMY_TEAM_ID,
+		player_lineage,
+		units
+	)
+
 func _build_lineages() -> void:
 	player_lineage = RTSLineageStateScript.new() as RTSLineageState
 	player_lineage.configure("First Lineage", 1)
@@ -239,6 +255,7 @@ func _start_encounter(adaptation: RTSAdaptationDefinition) -> void:
 
 	_spawn_test_units()
 	_build_ai_controller()
+	_build_encounter_controller()
 	_update_status()
 	queue_redraw()
 
@@ -305,6 +322,43 @@ func _on_unit_died(unit: RTSUnit) -> void:
 	selected_units.erase(unit)
 	_update_status()
 
+func _on_encounter_finished(victory: bool, report: Dictionary) -> void:
+	_clear_selection()
+	_update_status()
+
+	if result_panel == null or result_label == null:
+		return
+
+	var friendly_alive: int = int(report.get("friendly_alive", 0))
+	var initial_friendly: int = int(report.get("initial_friendly_count", 0))
+	var hostiles_defeated: int = int(report.get("hostiles_defeated", 0))
+	var initial_hostiles: int = int(report.get("initial_hostile_count", 0))
+	var kill_points: int = int(report.get("kill_points", 0))
+	var survival_points: int = int(report.get("survival_points", 0))
+	var completion_points: int = int(report.get("completion_points", 0))
+	var time_points: int = int(report.get("time_points", 0))
+	var elapsed_seconds: float = float(report.get("elapsed_seconds", 0.0))
+	var encounter_score: int = int(report.get("encounter_score", 0))
+	var lineage_score: int = int(report.get("lineage_score", player_lineage.score))
+	var outcome_title: String = "EPOCH ENCOUNTER SURVIVED" if victory else "LINEAGE COLLAPSED"
+
+	result_label.text = "%s\n\nEastern Basin • %.1f seconds\nRivals defeated: %d / %d    +%d\nLineage survivors: %d / %d    +%d\nTempo bonus: +%d\nSurvival victory: +%d\n\nENCOUNTER SCORE: +%d\nLINEAGE SCORE: %d\n\nHistory: %s\n\nPress R to begin another lineage." % [
+		outcome_title,
+		elapsed_seconds,
+		hostiles_defeated,
+		initial_hostiles,
+		kill_points,
+		friendly_alive,
+		initial_friendly,
+		survival_points,
+		time_points,
+		completion_points,
+		encounter_score,
+		lineage_score,
+		player_lineage.get_latest_history(),
+	]
+	result_panel.show()
+
 func _build_ui() -> void:
 	var canvas := CanvasLayer.new()
 	canvas.name = "HUD"
@@ -326,12 +380,12 @@ func _build_ui() -> void:
 	margin.add_child(box)
 
 	var title := Label.new()
-	title.text = "EVOLUTION RTS — FIRST ADAPTATION"
+	title.text = "EVOLUTION RTS — ENCOUNTER SCORE"
 	title.add_theme_font_size_override("font_size", 18)
 	box.add_child(title)
 
 	var instructions := Label.new()
-	instructions.text = "Choose how the First Lineage evolves, then fight the Rival Lineage.\nDrag-select • Right-click move/attack • Hostiles aggro nearby • R resets evolution"
+	instructions.text = "Choose an adaptation, survive the eastern basin, and turn the result into lineage history.\nDrag-select • Right-click move/attack • Hostiles aggro nearby • R starts a new lineage"
 	box.add_child(instructions)
 
 	status_label = Label.new()
@@ -377,6 +431,23 @@ func _build_ui() -> void:
 	predatory_button.custom_minimum_size = Vector2(285, 70)
 	predatory_button.pressed.connect(_on_predatory_limbs_pressed)
 	choices.add_child(predatory_button)
+
+	result_panel = PanelContainer.new()
+	result_panel.position = Vector2(16, 150)
+	result_panel.custom_minimum_size = Vector2(610, 0)
+	canvas.add_child(result_panel)
+
+	var result_margin := MarginContainer.new()
+	result_margin.add_theme_constant_override("margin_left", 16)
+	result_margin.add_theme_constant_override("margin_right", 16)
+	result_margin.add_theme_constant_override("margin_top", 14)
+	result_margin.add_theme_constant_override("margin_bottom", 14)
+	result_panel.add_child(result_margin)
+
+	result_label = Label.new()
+	result_label.add_theme_font_size_override("font_size", 15)
+	result_margin.add_child(result_label)
+	result_panel.hide()
 
 	_update_status()
 
