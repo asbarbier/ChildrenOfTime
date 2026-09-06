@@ -1,19 +1,19 @@
 # ChildrenOfTime Prototype Architecture
 
-This document is the working source of truth for the prototype's code boundaries. The goal is to keep each system responsible for one job so combat, AI, gathering, production, abilities, scoring, and evolution mechanics can grow without turning `main.gd` or `unit.gd` into god objects.
+This document is the working source of truth for the prototype's code boundaries. The goal is to keep each system responsible for one job so combat, AI, scoring, evolution, and the future macro/epoch layer can grow without turning `main.gd` or `unit.gd` into god objects.
 
 ## Current flow
 
 ```text
                  RTSLineageState
-             (epoch / score / adaptations)
+       (epoch / score / adaptations / history)
                          |
                          +------> RTSAdaptationDefinition
                          |        (evolutionary modifiers + visuals)
                          |
                          v
                 RTSUnitDefinition
-          (base organism data Resource)
+             (base organism Resource)
                          |
                   lineage resolves
                          |
@@ -46,200 +46,157 @@ RTSAIController ---------------+
                                |
                                v
                         RTSUnit execution
-          (path following / acceleration / separation / combat transitions)
+                               |
+                               v
+                   RTSEncounterController
+          (outcome / score / persistent result)
+                               |
+                               v
+                       RTSLineageState
 ```
 
-The key long-term loop is:
+The long-term game loop is now represented end to end:
 
 ```text
-history -> lineage -> organism definitions -> tactical encounter -> result -> history
+history -> lineage -> organism -> tactical encounter -> result -> score/history
 ```
 
-Build 10 proves the first half of that loop: a lineage choice now changes both the statistics and appearance of the organisms that enter an encounter.
+Build 10 proved that lineage history can change the organism entering battle. Build 11 proves that the tactical battle can produce a persistent result that returns to the lineage.
 
 ## Responsibilities
 
 ### `main.gd`
-Owns scene-level composition and player interaction.
+Owns scene composition and player interaction.
 
-- creates the prototype lineages
-- presents the temporary/debug adaptation choice UI
-- selects which `UnitDefinition` resources participate in the encounter
-- spawns prototype world objects through `RTSUnitFactory`
-- tracks player selection
-- resolves context clicks into high-level orders
-- owns camera and prototype HUD
-- wires services/controllers together
+- creates prototype lineages
+- presents the temporary adaptation-choice UI
+- selects encounter organism definitions
+- spawns through `RTSUnitFactory`
+- tracks player selection and context clicks
+- owns camera and prototype HUD/result panels
+- wires controllers and services together
 - does **not** calculate paths
 - does **not** hard-code organism combat/movement stats
-- does **not** implement adaptation stat math
-- does **not** own health, damage, cooldowns, hostility, or AI decision rules
-- does **not** execute unit movement/combat frame by frame
+- does **not** implement adaptation math
+- does **not** calculate encounter scoring
+- does **not** execute movement/combat frame by frame
 
-The current prototype treats team `1` as player-controlled and team `2` as hostile. The current `First Lineage` and `Rival Lineage` are encounter scaffolding, not final lore.
+Team `1`, team `2`, `First Lineage`, `Rival Lineage`, and the Eastern Basin encounter are prototype scaffolding, not final lore.
 
 ### `unit_definition.gd`
 Defines reusable base organism data as a Godot `Resource`.
 
-Current data includes:
+Current data includes movement, body radius, combat stats, body texture/visual size, and organism tags. Concrete definitions live under `data/units/`.
 
-- definition ID and display name
-- movement speed
-- acceleration
-- body radius
-- max health
-- attack damage
-- attack range
-- attack cooldown
-- body texture and visual size
-- descriptive tags
-
-Concrete definitions live under `data/units/`. Build 10 has `primitive_hunter.tres` and `rival_hunter.tres`.
-
-A definition describes what a base organism is. It should not contain runtime health, targets, path state, AI decisions, or historical lineage state.
+A definition describes a base organism. It does not contain runtime state, AI decisions, or lineage history.
 
 ### `adaptation_definition.gd`
 Defines one evolutionary change as reusable data.
 
-Current adaptation data can modify:
+Adaptations may modify movement, health, damage, range, cooldown, body radius, visual size, texture, and tags. Tag requirements allow adaptations to target organism families without scattering historical checks through tactical code.
 
-- movement speed and acceleration
-- max health
-- attack damage/range/cooldown
-- body radius
-- visual size
-- visual texture
-- organism tags
+Current proof adaptations:
 
-Adaptations can require tags, so a future adaptation can apply only to appropriate organism families without adding `if has_adaptation(...)` branches inside tactical code.
-
-Build 10 contains two proof adaptations under `data/adaptations/`:
-
-- `carapace.tres` — slower, larger, much tougher hunter with armored visuals
-- `predatory_limbs.tres` — faster, more lethal, less durable hunter with predatory visuals
-
-An adaptation describes a historical/evolutionary modifier. It does not own a runtime unit and does not issue tactical orders.
+- `carapace.tres` — slower, larger, tougher, armored hunter
+- `predatory_limbs.tres` — faster, more lethal, less durable hunter
 
 ### `lineage_state.gd`
-Owns persistent civilization/lineage state that can survive across tactical encounters.
+Owns persistent civilization/lineage state across tactical encounters.
 
 Current state includes:
 
 - lineage name
 - epoch
 - cumulative score
-- chosen `RTSAdaptationDefinition` resources
+- chosen adaptations
+- historical result entries
 
-`resolve_unit_definition()` duplicates the base organism definition and applies the lineage's adaptations to that copy. The source definition remains unchanged.
-
-This is a critical boundary: historical choices become encounter-ready organism data here, before any runtime unit exists.
+`resolve_unit_definition()` duplicates the base definition and applies lineage adaptations to the copy. `record_history()` stores durable narrative results from encounters.
 
 The lineage is the long-lived object. Individual RTS units are temporary expressions of it.
 
 ### `unit_factory.gd`
-Owns the translation from persistent organism data into runtime tactical actors.
+Translates persistent organism data into runtime tactical actors.
 
 - accepts a base `RTSUnitDefinition`
-- asks the lineage to resolve that definition
+- asks the lineage to resolve it
 - instantiates `RTSUnit`
-- applies resolved movement/combat values
-- applies resolved visuals
-- applies encounter-specific team/color affiliation
-- returns the finished runtime unit
+- applies resolved movement/combat/visual values
+- applies encounter-specific faction information
 
-This prevents `main.gd` from knowing how organism data maps into components and prevents `RTSUnit` from knowing why its stats or appearance have the values they do.
+The factory prevents `main.gd` from knowing component details and prevents `RTSUnit` from knowing why evolution produced its stats or appearance.
+
+### `encounter_controller.gd`
+Owns tactical encounter completion and scoring.
+
+- receives the participating units, player team, hostile team, and player lineage
+- tracks encounter duration
+- observes unit deaths
+- detects victory or lineage collapse
+- calculates score components
+- writes the final score into `RTSLineageState`
+- records a historical result entry
+- emits one encounter-finished report for presentation
+
+Current prototype score components are intentionally simple:
+
+- hostile defeats
+- surviving lineage members
+- time/tempo bonus on victory
+- victory completion bonus
+
+This scoring model is scaffolding. The important architecture is that tactical systems produce facts, while the encounter controller interprets those facts into an encounter result. Future ecological, discovery, objective, population, and legacy scoring belongs here or in services called from this boundary—not in `RTSUnit`.
 
 ### `command_controller.gd`
-Owns order orchestration for **both player and AI**.
+Owns order orchestration for both player and AI.
 
-- receives high-level orders such as move and attack
+- receives move/attack/stop orders
 - calculates formation destinations
-- requests global paths from the navigation service
-- assigns intent/targets to units
-- handles chase repath requests from units
-- should remain agnostic about whether an order came from a mouse click, AI, scripted encounter, or future macro layer
-- should remain agnostic about how a unit physically moves or deals damage each frame
+- requests global paths
+- assigns unit intent and targets
+- handles chase repath requests
+- remains agnostic about whether an order came from the player, AI, scripted encounter, or future macro layer
 
-Current public order API:
-
-- `issue_move_order()`
-- `issue_attack_order()`
-- `issue_stop_order()`
-
-This shared command API is an important architectural rule. Player control and AI control should never grow separate implementations of the same physical actions.
+Player and AI must continue to use the same command API.
 
 ### `ai_controller.gd`
-Owns the current prototype's simple PvE decision-making.
+Owns current prototype PvE decision-making.
 
 - controls one team
-- thinks on a throttled interval instead of every frame
-- looks for nearby hostile units
-- sends attack orders through `RTSCommandController`
-- does **not** pathfind
-- does **not** directly move units
-- does **not** directly deal damage
-- does **not** bypass the same command pipeline used by the player
-
-The current AI is intentionally tiny: idle hostile units acquire the nearest valid enemy inside an aggro radius. This is enough to prove the architecture before behavior trees, encounter scripting, threat scoring, or strategic AI exist.
+- thinks on a throttled interval
+- finds nearby hostiles
+- issues attack orders through `RTSCommandController`
+- does not pathfind, move units directly, or apply damage directly
 
 ### `navigation_manager.gd`
 Owns global navigation only.
 
 - builds and owns the `NavigationServer2D` map
-- knows walkable space and static terrain obstructions
+- knows static walkable space and terrain obstructions
 - answers path queries
-- does **not** know about selection, combat, factions, AI, lineage, evolution, or unit intent
-
-If path-query load becomes significant later, this is the boundary where shared squad paths, caching, hierarchical navigation, or threaded path work can be introduced.
+- knows nothing about combat, AI, scoring, lineage, evolution, or encounter history
 
 ### `unit.gd`
 Owns one unit's runtime intent and physical execution.
 
-- exposes explicit intent state
 - follows movement/chase paths
-- handles acceleration and steering feel
-- handles cheap local separation
-- transitions between `CHASE` and `ATTACK` based on range
-- requests a new chase path instead of calculating one itself
+- handles acceleration and local separation
+- transitions between chase and attack based on range
+- requests repaths rather than calculating them
 - composes faction and combat components
-- renders an already-resolved body texture/size
-- accepts already-resolved runtime values
-- does **not** interpret player input
-- does **not** make strategic AI decisions
-- does **not** calculate global paths
-- does **not** know which adaptations or epoch produced its stats or appearance
-- does **not** own faction diplomacy rules beyond delegating to its faction component
-- does **not** own combat state beyond delegating to its combat component
+- renders already-resolved visuals
+- does not interpret player input
+- does not make strategic AI decisions
+- does not know which adaptation or historical event produced its stats
+- does not calculate encounter score or persistent history
 
-Current intents:
-
-- `IDLE`
-- `MOVE`
-- `ATTACK`
-- `CHASE`
-- `DEAD`
+Current intents: `IDLE`, `MOVE`, `ATTACK`, `CHASE`, `DEAD`.
 
 ### `faction_component.gd`
-Owns unit affiliation.
-
-- stores `team_id`
-- answers allied/hostile relationship checks
-- treats team `0` as neutral/unassigned
-
-The current hostility rule is simply "different non-zero team IDs are hostile." When diplomacy becomes richer, this rule should move behind a faction/diplomacy service without changing unit or command APIs.
+Owns unit affiliation and the current simple allied/hostile check. Rich diplomacy should later move behind a diplomacy service without changing tactical unit APIs.
 
 ### `combat_component.gd`
-Owns reusable combat state and timing.
-
-- max/current health
-- attack damage
-- attack range
-- attack cooldown
-- damage application
-- death signal
-- attack cooldown timing
-
-It deliberately does **not** choose targets, chase enemies, pathfind, or decide when an attack order should exist.
+Owns health, damage, attack range, cooldown, damage application, death signaling, and attack timing. It does not select targets, pathfind, or interpret encounter meaning.
 
 ## Design rules
 
@@ -253,50 +210,38 @@ An AI system may choose an order, but it should issue that order through the sam
 
 A combat component may apply damage, but it should not decide who deserves to get hit.
 
-A `UnitDefinition` describes an organism; it is not the organism's runtime state.
+A `UnitDefinition` describes an organism; it is not runtime state.
 
 An `AdaptationDefinition` describes how historical lineage state modifies compatible organisms; it is not a runtime buff system.
 
-A lineage may explain why an organism has certain traits, but a tactical unit should not know the historical reason.
+A lineage explains why organisms have certain traits and stores what persists across encounters.
 
-Faction identity is data. Diplomacy is policy. Keep those separable.
+An encounter controller interprets tactical facts into outcomes; tactical units should not know whether their death was worth points or historically significant.
 
-The future macro/epoch layer should produce lineage/world state and encounters, not reach down and manipulate tactical units directly.
+Faction identity is data. Diplomacy is policy. Keep them separable.
 
-## Next extraction points
+The future macro/epoch layer should produce lineage/world state and encounters, then consume encounter results. It should not reach down and manipulate tactical units directly.
 
-Do not split these until behavior actually demands it, but these are the intended seams:
+## Next seams — intentionally paused after Build 11
 
-- `EncounterController` — tactical objectives, success/failure, encounter score, transition back to macro time
-- `SelectionController` — when selection/context-click rules become more complex
-- `TargetingService` — when target scoring, aggro, threat, and visibility become real systems
-- `DiplomacyService` — alliances, neutral factions, reputation, temporary hostility
+We are deliberately stopping feature work after Build 11 to reassess the next vertical slice. Likely future seams include:
+
+- `Epoch/Macro board` — territory, events, time jumps, ecology, history, cumulative scoring
+- richer `EncounterDefinition` data — objectives, map setup, environmental pressures, score rules
+- `SelectionController` — when selection/context-click logic grows
+- `TargetingService` — threat, visibility, target scoring, aggro policy
+- `DiplomacyService` — alliances, neutral populations, temporary hostility
 - `World/Spawn service` — when prototype spawning becomes production gameplay
-- `Death/Corpse system` — cleanup, loot, remains, resurrection, decomposition, etc.
-- `Epoch/Macro board` — territory, events, time jumps, ecology, history, and cumulative scoring
+- `Death/Corpse system` — remains, biomass, decomposition, resurrection, loot
 
-The next concept-facing milestone should close the loop in the other direction: tactical results should produce an encounter result/score that can become persistent lineage history.
+No one of these should be built merely because the seam exists. The next system should be chosen by the next playable concept we want to prove.
 
 ## Scaling notes
 
-The current chase model is intentionally split across two layers:
+Navigation scaling belongs at the command/navigation boundary through route sharing, caching, hierarchical navigation, or threading.
 
-1. `RTSUnit` notices that its target moved or left range and requests a repath.
-2. `RTSCommandController` asks `RTSNavigationManager` for that path and gives it back to the unit.
+Evolution scaling belongs at lineage resolution: base definitions + compatible adaptation data -> resolved encounter organism.
 
-The AI follows the same separation:
+Scoring scaling belongs at the encounter boundary: tactical events -> encounter report -> persistent lineage history.
 
-1. `RTSAIController` decides that an idle hostile should attack a nearby target.
-2. It calls `RTSCommandController.issue_attack_order()` exactly as another control source would.
-3. Commands, navigation, intent, movement, and damage proceed through the normal pipeline.
-
-Evolution follows a similar boundary:
-
-1. A persistent `RTSLineageState` owns historical state and chosen adaptations.
-2. A base `RTSUnitDefinition` describes the unevolved/base organism.
-3. `RTSAdaptationDefinition` resources describe compatible evolutionary changes.
-4. The lineage duplicates and resolves the base definition into encounter-ready data.
-5. `RTSUnitFactory` turns the resolved data into a runtime `RTSUnit`.
-6. The runtime unit never asks which adaptation, epoch, or historical event produced those values.
-
-If hundreds of units later chase the same target, the command/navigation boundary is where route sharing and throttling belong.
+That separation gives the game its core loop without forcing the future macro layer, tactical simulation, and evolutionary data model to know each other's implementation details.
