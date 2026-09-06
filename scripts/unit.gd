@@ -29,7 +29,9 @@ signal died(unit)
 var selected: bool = false
 var unit_id: int = 0
 var current_intent: Intent = Intent.IDLE
-var display_color := Color("87a96b")
+var display_color: Color = Color("87a96b")
+var body_texture: Texture2D
+var visual_size: Vector2 = Vector2(56.0, 56.0)
 
 var faction_component: RTSFactionComponent
 var combat_component: RTSCombatComponent
@@ -63,6 +65,11 @@ func configure_affiliation(team_id: int, color: Color) -> void:
 	display_color = color
 	if faction_component != null:
 		faction_component.configure(team_id)
+	queue_redraw()
+
+func configure_visual(texture: Texture2D, size: Vector2) -> void:
+	body_texture = texture
+	visual_size = Vector2(maxf(8.0, size.x), maxf(8.0, size.y))
 	queue_redraw()
 
 func configure_combat(
@@ -399,7 +406,8 @@ func _resolve_obstacle_overlap() -> void:
 		global_position = obstacle.global_position + offset.normalized() * minimum_distance
 
 func contains_point(world_point: Vector2) -> bool:
-	return is_alive() and global_position.distance_to(world_point) <= radius + 6.0
+	var selection_radius: float = maxf(radius + 6.0, maxf(visual_size.x, visual_size.y) * 0.42)
+	return is_alive() and global_position.distance_to(world_point) <= selection_radius
 
 func _on_health_changed(_current_health: float, _max_health: float) -> void:
 	queue_redraw()
@@ -409,24 +417,32 @@ func _on_combat_died() -> void:
 	died.emit(self)
 
 func _draw() -> void:
-	var body_color := display_color if is_alive() else Color("4a4f49")
-	var outline_color := body_color.lightened(0.3) if is_alive() else Color("686d67")
-
-	draw_circle(Vector2.ZERO, radius, body_color)
-	draw_arc(Vector2.ZERO, radius, 0.0, TAU, 24, outline_color, 2.0)
-	draw_circle(Vector2(5, -4), 2.5, Color("172017"))
+	if body_texture != null:
+		var half_size: Vector2 = visual_size * 0.5
+		var texture_rect := Rect2(-half_size, visual_size)
+		var texture_tint := Color.WHITE if is_alive() else Color(0.42, 0.44, 0.42, 0.82)
+		draw_texture_rect(body_texture, texture_rect, false, texture_tint)
+	else:
+		var body_color: Color = display_color if is_alive() else Color("4a4f49")
+		var outline_color: Color = body_color.lightened(0.3) if is_alive() else Color("686d67")
+		draw_circle(Vector2.ZERO, radius, body_color)
+		draw_arc(Vector2.ZERO, radius, 0.0, TAU, 24, outline_color, 2.0)
+		draw_circle(Vector2(5, -4), 2.5, Color("172017"))
 
 	if is_alive() and combat_component != null and combat_component.current_health < combat_component.max_health:
 		_draw_health_bar()
 
 	if selected and is_alive():
-		draw_arc(Vector2.ZERO, radius + 6.0, 0.0, TAU, 32, Color("f0d96b"), 3.0)
+		var selection_radius: float = maxf(radius + 6.0, maxf(visual_size.x, visual_size.y) * 0.42)
+		draw_arc(Vector2.ZERO, selection_radius, 0.0, TAU, 32, Color("f0d96b"), 3.0)
 		_draw_remaining_path()
 
 func _draw_health_bar() -> void:
-	var bar_width: float = 34.0
+	var bar_width: float = maxf(34.0, visual_size.x * 0.68)
 	var bar_height: float = 5.0
-	var bar_origin := Vector2(-bar_width * 0.5, -radius - 13.0)
+	var sprite_half_height: float = visual_size.y * 0.5
+	var bar_y: float = -maxf(radius, sprite_half_height) - 10.0
+	var bar_origin := Vector2(-bar_width * 0.5, bar_y)
 	var ratio: float = combat_component.get_health_ratio()
 
 	draw_rect(Rect2(bar_origin, Vector2(bar_width, bar_height)), Color("20241f"), true)
