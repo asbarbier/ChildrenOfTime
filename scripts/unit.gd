@@ -3,6 +3,8 @@ extends Node2D
 
 @export var move_speed: float = 190.0
 @export var radius: float = 14.0
+@export var separation_radius: float = 34.0
+@export var separation_strength: float = 1.35
 
 var selected: bool = false
 var target_position: Vector2
@@ -11,6 +13,7 @@ var unit_id: int = 0
 
 func _ready() -> void:
     target_position = global_position
+    add_to_group("rts_units")
     queue_redraw()
 
 func set_selected(value: bool) -> void:
@@ -33,9 +36,40 @@ func _process(delta: float) -> void:
         has_target = false
         return
 
-    var step := move_speed * delta
-    global_position += to_target.normalized() * min(step, distance)
+    var desired_velocity := to_target.normalized() * move_speed
+    var separation := _get_separation_force()
+
+    if separation != Vector2.ZERO:
+        desired_velocity += separation * move_speed * separation_strength
+
+    if desired_velocity.length() > move_speed:
+        desired_velocity = desired_velocity.normalized() * move_speed
+
+    var step := desired_velocity * delta
+    if step.length() > distance:
+        global_position = target_position
+        has_target = false
+    else:
+        global_position += step
+
     queue_redraw()
+
+func _get_separation_force() -> Vector2:
+    var force := Vector2.ZERO
+
+    for node in get_tree().get_nodes_in_group("rts_units"):
+        if node == self or not node is RTSUnit:
+            continue
+
+        var other := node as RTSUnit
+        var offset := global_position - other.global_position
+        var distance := offset.length()
+
+        if distance > 0.001 and distance < separation_radius:
+            var weight := 1.0 - (distance / separation_radius)
+            force += offset.normalized() * weight
+
+    return force
 
 func contains_point(world_point: Vector2) -> bool:
     return global_position.distance_to(world_point) <= radius + 6.0
