@@ -46,7 +46,7 @@ func is_ready() -> bool:
 		and NavigationServer2D.map_get_iteration_id(navigation_map) > 0
 	)
 
-func get_path(start: Vector2, destination: Vector2) -> PackedVector2Array:
+func find_navigation_path(start: Vector2, destination: Vector2) -> PackedVector2Array:
 	if not is_ready():
 		return PackedVector2Array()
 
