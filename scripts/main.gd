@@ -3,6 +3,7 @@ extends Node2D
 const RTSUnitScript = preload("res://scripts/unit.gd")
 const RTSObstacleScript = preload("res://scripts/obstacle.gd")
 const RTSNavigationManagerScript = preload("res://scripts/navigation_manager.gd")
+const RTSCommandControllerScript = preload("res://scripts/command_controller.gd")
 
 const MAP_SIZE := Vector2(3200.0, 1800.0)
 const GRID_SIZE := 64.0
@@ -10,7 +11,6 @@ const CAMERA_SPEED := 700.0
 const MIN_ZOOM := 0.55
 const MAX_ZOOM := 2.0
 const CLICK_DRAG_THRESHOLD := 8.0
-const FORMATION_SPACING := 42.0
 
 @onready var camera: Camera2D = $Camera2D
 
@@ -18,6 +18,7 @@ var units: Array[RTSUnit] = []
 var selected_units: Array[RTSUnit] = []
 var obstacles: Array[RTSObstacle] = []
 var navigation_manager: RTSNavigationManager
+var command_controller: RTSCommandController
 
 var dragging_selection := false
 var drag_start_world := Vector2.ZERO
@@ -33,6 +34,7 @@ var status_label: Label
 func _ready() -> void:
 	_spawn_test_obstacles()
 	_build_navigation()
+	_build_command_controller()
 	_spawn_test_units()
 	_build_ui()
 	queue_redraw()
@@ -138,30 +140,7 @@ func _issue_move_command(world_position: Vector2) -> void:
 	if selected_units.is_empty():
 		return
 
-	var count := selected_units.size()
-	var columns := int(ceil(sqrt(float(count))))
-	var rows := int(ceil(float(count) / float(columns)))
-	var formation_width := float(columns - 1) * FORMATION_SPACING
-	var formation_height := float(rows - 1) * FORMATION_SPACING
-
-	for i in range(count):
-		var col := i % columns
-		var row := i / columns
-		var offset := Vector2(
-			float(col) * FORMATION_SPACING - formation_width * 0.5,
-			float(row) * FORMATION_SPACING - formation_height * 0.5
-		)
-		var unit := selected_units[i]
-		var requested_target := _clamp_to_map(world_position + offset)
-		var path := navigation_manager.find_navigation_path(unit.global_position, requested_target)
-
-		if path.size() >= 2:
-			unit.set_navigation_path(path)
-		else:
-			# The NavigationServer needs at least one physics sync after startup.
-			# Direct movement is only a startup fallback, not the normal pathing mode.
-			unit.set_move_target(requested_target)
-
+	command_controller.issue_move_order(selected_units, world_position)
 	command_marker_position = world_position
 	command_marker_time = 0.7
 	queue_redraw()
@@ -171,6 +150,12 @@ func _build_navigation() -> void:
 	navigation_manager.name = "NavigationManager"
 	add_child(navigation_manager)
 	navigation_manager.build(MAP_SIZE, obstacles)
+
+func _build_command_controller() -> void:
+	command_controller = RTSCommandControllerScript.new() as RTSCommandController
+	command_controller.name = "CommandController"
+	add_child(command_controller)
+	command_controller.configure(navigation_manager, MAP_SIZE)
 
 func _spawn_test_obstacles() -> void:
 	var rock := RTSObstacleScript.new() as RTSObstacle
@@ -202,7 +187,7 @@ func _build_ui() -> void:
 
 	var panel := PanelContainer.new()
 	panel.position = Vector2(16, 16)
-	panel.custom_minimum_size = Vector2(430, 0)
+	panel.custom_minimum_size = Vector2(470, 0)
 	canvas.add_child(panel)
 
 	var margin := MarginContainer.new()
@@ -216,12 +201,12 @@ func _build_ui() -> void:
 	margin.add_child(box)
 
 	var title := Label.new()
-	title.text = "EVOLUTION RTS — NAVIGATION PROTOTYPE"
+	title.text = "EVOLUTION RTS — COMMAND/INTENT PROTOTYPE"
 	title.add_theme_font_size_override("font_size", 18)
 	box.add_child(title)
 
 	var instructions := Label.new()
-	instructions.text = "Drag-select • Shift adds/removes • Right-click moves\nWASD/arrows pan • Mouse wheel zoom • Middle-drag camera • R resets\nGlobal route: NavigationServer2D • Local behavior: separation + smooth steering"
+	instructions.text = "Drag-select • Shift adds/removes • Right-click moves\nWASD/arrows pan • Mouse wheel zoom • Middle-drag camera • R resets\nInput → CommandController → Unit Intent → Movement/Nav"
 	box.add_child(instructions)
 
 	status_label = Label.new()
