@@ -2,17 +2,20 @@ class_name RTSUnit
 extends Node2D
 
 @export var move_speed: float = 190.0
+@export var acceleration: float = 900.0
 @export var radius: float = 14.0
+@export var waypoint_tolerance: float = 22.0
 @export var separation_radius: float = 34.0
-@export var separation_strength: float = 1.35
-@export var obstacle_lookahead: float = 240.0
-@export var obstacle_clearance: float = 14.0
-@export var obstacle_avoidance_strength: float = 2.0
+@export var separation_strength: float = 0.85
+@export var obstacle_clearance: float = 4.0
 
 var selected: bool = false
 var target_position: Vector2
 var has_target: bool = false
 var unit_id: int = 0
+var current_velocity := Vector2.ZERO
+var navigation_path := PackedVector2Array()
+var path_index: int = 0
 
 func _ready() -> void:
 	target_position = global_position
@@ -24,45 +27,83 @@ func set_selected(value: bool) -> void:
 	queue_redraw()
 
 func set_move_target(world_position: Vector2) -> void:
-	target_position = world_position
-	has_target = true
+	var fallback_path := PackedVector2Array()
+	fallback_path.append(global_position)
+	fallback_path.append(world_position)
+	set_navigation_path(fallback_path)
+
+func set_navigation_path(path: PackedVector2Array) -> void:
+	navigation_path = path
+	path_index = 0
+
+	if navigation_path.is_empty():
+		has_target = false
+		current_velocity = Vector2.ZERO
+		return
+
+	target_position = navigation_path[navigation_path.size() - 1]
+
+	while (
+		path_index < navigation_path.size()
+		and global_position.distance_to(navigation_path[path_index]) <= waypoint_tolerance
+	):
+		path_index += 1
+
+	has_target = path_index < navigation_path.size()
+	if not has_target:
+		current_velocity = Vector2.ZERO
+
+	queue_redraw()
 
 func _process(delta: float) -> void:
 	if not has_target:
 		return
 
-	var to_target: Vector2 = target_position - global_position
-	var distance: float = to_target.length()
-
-	if distance <= 2.0:
-		global_position = target_position
-		has_target = false
+	_advance_path_if_needed()
+	if not has_target:
 		return
 
-	var desired_direction: Vector2 = to_target.normalized()
-	var separation: Vector2 = _get_separation_force()
-	var obstacle_avoidance: Vector2 = _get_obstacle_avoidance(desired_direction)
-	var steering: Vector2 = desired_direction
+	var waypoint: Vector2 = navigation_path[path_index]
+	var to_waypoint: Vector2 = waypoint - global_position
+	var distance: float = to_waypoint.length()
 
-	if separation != Vector2.ZERO:
-		steering += separation * separation_strength
-	if obstacle_avoidance != Vector2.ZERO:
-		steering += obstacle_avoidance * obstacle_avoidance_strength
+	if distance <= 0.001:
+		_advance_path_if_needed()
+		return
+
+	var desired_direction := to_waypoint.normalized()
+	var separation := _get_separation_force()
+	var steering := desired_direction + separation * separation_strength
 
 	if steering == Vector2.ZERO:
 		steering = desired_direction
 	else:
 		steering = steering.normalized()
 
-	var step: Vector2 = steering * move_speed * delta
-	if step.length() > distance and obstacle_avoidance == Vector2.ZERO:
-		global_position = target_position
-		has_target = false
-	else:
-		global_position += step
-		_resolve_obstacle_overlap()
+	var desired_velocity := steering * move_speed
+	current_velocity = current_velocity.move_toward(desired_velocity, acceleration * delta)
 
+	if current_velocity.length() > move_speed:
+		current_velocity = current_velocity.normalized() * move_speed
+
+	global_position += current_velocity * delta
+	_resolve_obstacle_overlap()
+	_advance_path_if_needed()
 	queue_redraw()
+
+func _advance_path_if_needed() -> void:
+	while path_index < navigation_path.size():
+		var waypoint := navigation_path[path_index]
+		if global_position.distance_to(waypoint) > waypoint_tolerance:
+			break
+		path_index += 1
+
+	if path_index >= navigation_path.size():
+		if global_position.distance_to(target_position) <= waypoint_tolerance:
+			global_position = target_position
+		has_target = false
+		current_velocity = Vector2.ZERO
+		queue_redraw()
 
 func _get_separation_force() -> Vector2:
 	var force := Vector2.ZERO
@@ -78,42 +119,6 @@ func _get_separation_force() -> Vector2:
 		if distance > 0.001 and distance < separation_radius:
 			var weight: float = 1.0 - (distance / separation_radius)
 			force += offset.normalized() * weight
-
-	return force
-
-func _get_obstacle_avoidance(forward: Vector2) -> Vector2:
-	var force := Vector2.ZERO
-
-	for node in get_tree().get_nodes_in_group("rts_obstacles"):
-		if not node is RTSObstacle:
-			continue
-
-		var obstacle := node as RTSObstacle
-		var to_obstacle: Vector2 = obstacle.global_position - global_position
-		var forward_distance: float = to_obstacle.dot(forward)
-
-		if forward_distance <= 0.0 or forward_distance > obstacle_lookahead:
-			continue
-
-		var lateral_offset: Vector2 = to_obstacle - forward * forward_distance
-		var lateral_distance: float = lateral_offset.length()
-		var safe_radius: float = obstacle.radius + radius + obstacle_clearance
-
-		if lateral_distance >= safe_radius:
-			continue
-
-		var cross_value: float = forward.cross(to_obstacle)
-		var steer_side: float
-
-		if absf(cross_value) < 0.01:
-			steer_side = -1.0 if unit_id % 2 == 0 else 1.0
-		else:
-			steer_side = -1.0 if cross_value > 0.0 else 1.0
-
-		var perpendicular := Vector2(-forward.y, forward.x) * steer_side
-		var lateral_weight: float = 1.0 - (lateral_distance / safe_radius)
-		var approach_weight: float = 1.0 - (forward_distance / obstacle_lookahead)
-		force += perpendicular * (0.75 + lateral_weight + approach_weight)
 
 	return force
 
@@ -147,3 +152,17 @@ func _draw() -> void:
 
 	if selected:
 		draw_arc(Vector2.ZERO, radius + 6.0, 0.0, TAU, 32, Color("f0d96b"), 3.0)
+		_draw_remaining_path()
+
+func _draw_remaining_path() -> void:
+	if not has_target or path_index >= navigation_path.size():
+		return
+
+	var points := PackedVector2Array()
+	points.append(Vector2.ZERO)
+
+	for i in range(path_index, navigation_path.size()):
+		points.append(to_local(navigation_path[i]))
+
+	if points.size() >= 2:
+		draw_polyline(points, Color(0.95, 0.85, 0.35, 0.45), 2.0)
