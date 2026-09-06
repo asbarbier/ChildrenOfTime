@@ -1,0 +1,16 @@
+[gd_resource load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/unit_definition.gd" id="1_definition"]
+
+[resource]
+script = ExtResource("1_definition")
+definition_id = "primitive_hunter"
+display_name = "Primitive Hunter"
+move_speed = 190.0
+acceleration = 900.0
+radius = 14.0
+max_health = 100.0
+attack_damage = 20.0
+attack_range = 72.0
+attack_cooldown = 0.75
+tags = PackedStringArray("biological", "terrestrial", "hunter")
