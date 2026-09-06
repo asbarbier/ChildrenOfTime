@@ -1,6 +1,7 @@
 extends Node2D
 
 const RTSUnitScript = preload("res://scripts/unit.gd")
+const RTSObstacleScript = preload("res://scripts/obstacle.gd")
 
 const MAP_SIZE := Vector2(3200.0, 1800.0)
 const GRID_SIZE := 64.0
@@ -9,11 +10,13 @@ const MIN_ZOOM := 0.55
 const MAX_ZOOM := 2.0
 const CLICK_DRAG_THRESHOLD := 8.0
 const FORMATION_SPACING := 42.0
+const TARGET_OBSTACLE_CLEARANCE := 34.0
 
 @onready var camera: Camera2D = $Camera2D
 
 var units: Array[RTSUnit] = []
 var selected_units: Array[RTSUnit] = []
+var obstacles: Array[RTSObstacle] = []
 
 var dragging_selection := false
 var drag_start_world := Vector2.ZERO
@@ -27,6 +30,7 @@ var command_marker_time := 0.0
 var status_label: Label
 
 func _ready() -> void:
+	_spawn_test_obstacles()
 	_spawn_test_units()
 	_build_ui()
 	queue_redraw()
@@ -145,11 +149,35 @@ func _issue_move_command(world_position: Vector2) -> void:
 			float(col) * FORMATION_SPACING - formation_width * 0.5,
 			float(row) * FORMATION_SPACING - formation_height * 0.5
 		)
-		selected_units[i].set_move_target(_clamp_to_map(world_position + offset))
+		var target := _make_target_walkable(world_position + offset)
+		selected_units[i].set_move_target(target)
 
 	command_marker_position = world_position
 	command_marker_time = 0.7
 	queue_redraw()
+
+func _make_target_walkable(point: Vector2) -> Vector2:
+	var result := _clamp_to_map(point)
+
+	for obstacle in obstacles:
+		var offset: Vector2 = result - obstacle.global_position
+		var minimum_distance: float = obstacle.radius + TARGET_OBSTACLE_CLEARANCE
+		var distance: float = offset.length()
+
+		if distance < minimum_distance:
+			if distance <= 0.001:
+				offset = Vector2.RIGHT
+			result = obstacle.global_position + offset.normalized() * minimum_distance
+
+	return _clamp_to_map(result)
+
+func _spawn_test_obstacles() -> void:
+	var rock := RTSObstacleScript.new() as RTSObstacle
+	rock.name = "TheRock"
+	rock.position = Vector2(1200.0, 700.0)
+	rock.radius = 145.0
+	add_child(rock)
+	obstacles.append(rock)
 
 func _spawn_test_units() -> void:
 	var start := Vector2(540.0, 430.0)
@@ -192,7 +220,7 @@ func _build_ui() -> void:
 	box.add_child(title)
 
 	var instructions := Label.new()
-	instructions.text = "Drag-select • Shift adds/removes • Right-click moves\nWASD/arrows pan • Mouse wheel zoom • Middle-drag camera • R resets"
+	instructions.text = "Drag-select • Shift adds/removes • Right-click moves\nWASD/arrows pan • Mouse wheel zoom • Middle-drag camera • R resets\nSend the dots through the rock. They should go around the damn thing."
 	box.add_child(instructions)
 
 	status_label = Label.new()
@@ -228,8 +256,8 @@ func _clamp_camera() -> void:
 
 func _clamp_to_map(point: Vector2) -> Vector2:
 	return Vector2(
-		clamp(point.x, 0.0, MAP_SIZE.x),
-		clamp(point.y, 0.0, MAP_SIZE.y)
+		clampf(point.x, 0.0, MAP_SIZE.x),
+		clampf(point.y, 0.0, MAP_SIZE.y)
 	)
 
 func _draw() -> void:
