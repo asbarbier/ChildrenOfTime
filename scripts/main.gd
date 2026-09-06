@@ -56,8 +56,6 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_R:
 			get_tree().reload_current_scene()
-		elif event.keycode == KEY_S:
-			command_controller.issue_stop_order(selected_units)
 
 func _handle_mouse_button(event: InputEventMouseButton) -> void:
 	if event.button_index == MOUSE_BUTTON_LEFT:
@@ -265,7 +263,7 @@ func _build_ui() -> void:
 	box.add_child(title)
 
 	var instructions := Label.new()
-	instructions.text = "Green = player • Red = hostile\nDrag-select green units • Right-click ground moves • Right-click red attacks\nS stops • WASD/arrows pan • Mouse wheel zoom • Middle-drag camera • R resets"
+	instructions.text = "Green = player • Red = hostile\nDrag-select green units • Right-click ground moves • Right-click red attacks\nWASD/arrows pan • Mouse wheel zoom • Middle-drag camera • R resets"
 	box.add_child(instructions)
 
 	status_label = Label.new()
