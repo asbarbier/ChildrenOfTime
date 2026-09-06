@@ -15,5 +15,9 @@ extends Resource
 @export var attack_range: float = 72.0
 @export var attack_cooldown: float = 0.75
 
+@export_category("Visual")
+@export var body_texture: Texture2D
+@export var visual_size: Vector2 = Vector2(56.0, 56.0)
+
 @export_category("Metadata")
 @export var tags: PackedStringArray = PackedStringArray()
