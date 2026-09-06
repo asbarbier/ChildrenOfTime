@@ -2,6 +2,7 @@ extends Node2D
 
 const RTSUnitScript = preload("res://scripts/unit.gd")
 const RTSObstacleScript = preload("res://scripts/obstacle.gd")
+const RTSNavigationManagerScript = preload("res://scripts/navigation_manager.gd")
 
 const MAP_SIZE := Vector2(3200.0, 1800.0)
 const GRID_SIZE := 64.0
@@ -10,13 +11,13 @@ const MIN_ZOOM := 0.55
 const MAX_ZOOM := 2.0
 const CLICK_DRAG_THRESHOLD := 8.0
 const FORMATION_SPACING := 42.0
-const TARGET_OBSTACLE_CLEARANCE := 34.0
 
 @onready var camera: Camera2D = $Camera2D
 
 var units: Array[RTSUnit] = []
 var selected_units: Array[RTSUnit] = []
 var obstacles: Array[RTSObstacle] = []
+var navigation_manager: RTSNavigationManager
 
 var dragging_selection := false
 var drag_start_world := Vector2.ZERO
@@ -31,6 +32,7 @@ var status_label: Label
 
 func _ready() -> void:
 	_spawn_test_obstacles()
+	_build_navigation()
 	_spawn_test_units()
 	_build_ui()
 	queue_redraw()
@@ -149,27 +151,26 @@ func _issue_move_command(world_position: Vector2) -> void:
 			float(col) * FORMATION_SPACING - formation_width * 0.5,
 			float(row) * FORMATION_SPACING - formation_height * 0.5
 		)
-		var target := _make_target_walkable(world_position + offset)
-		selected_units[i].set_move_target(target)
+		var unit := selected_units[i]
+		var requested_target := _clamp_to_map(world_position + offset)
+		var path := navigation_manager.get_path(unit.global_position, requested_target)
+
+		if path.size() >= 2:
+			unit.set_navigation_path(path)
+		else:
+			# The NavigationServer needs at least one physics sync after startup.
+			# Direct movement is only a startup fallback, not the normal pathing mode.
+			unit.set_move_target(requested_target)
 
 	command_marker_position = world_position
 	command_marker_time = 0.7
 	queue_redraw()
 
-func _make_target_walkable(point: Vector2) -> Vector2:
-	var result := _clamp_to_map(point)
-
-	for obstacle in obstacles:
-		var offset: Vector2 = result - obstacle.global_position
-		var minimum_distance: float = obstacle.radius + TARGET_OBSTACLE_CLEARANCE
-		var distance: float = offset.length()
-
-		if distance < minimum_distance:
-			if distance <= 0.001:
-				offset = Vector2.RIGHT
-			result = obstacle.global_position + offset.normalized() * minimum_distance
-
-	return _clamp_to_map(result)
+func _build_navigation() -> void:
+	navigation_manager = RTSNavigationManagerScript.new() as RTSNavigationManager
+	navigation_manager.name = "NavigationManager"
+	add_child(navigation_manager)
+	navigation_manager.build(MAP_SIZE, obstacles)
 
 func _spawn_test_obstacles() -> void:
 	var rock := RTSObstacleScript.new() as RTSObstacle
@@ -201,7 +202,7 @@ func _build_ui() -> void:
 
 	var panel := PanelContainer.new()
 	panel.position = Vector2(16, 16)
-	panel.custom_minimum_size = Vector2(390, 0)
+	panel.custom_minimum_size = Vector2(430, 0)
 	canvas.add_child(panel)
 
 	var margin := MarginContainer.new()
@@ -215,12 +216,12 @@ func _build_ui() -> void:
 	margin.add_child(box)
 
 	var title := Label.new()
-	title.text = "EVOLUTION RTS — MOVEMENT PROTOTYPE"
+	title.text = "EVOLUTION RTS — NAVIGATION PROTOTYPE"
 	title.add_theme_font_size_override("font_size", 18)
 	box.add_child(title)
 
 	var instructions := Label.new()
-	instructions.text = "Drag-select • Shift adds/removes • Right-click moves\nWASD/arrows pan • Mouse wheel zoom • Middle-drag camera • R resets\nSend the dots through the rock. They should go around the damn thing."
+	instructions.text = "Drag-select • Shift adds/removes • Right-click moves\nWASD/arrows pan • Mouse wheel zoom • Middle-drag camera • R resets\nGlobal route: NavigationServer2D • Local behavior: separation + smooth steering"
 	box.add_child(instructions)
 
 	status_label = Label.new()
