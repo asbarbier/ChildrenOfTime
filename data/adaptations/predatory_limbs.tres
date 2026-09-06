@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="RTSAdaptationDefinition" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/adaptation_definition.gd" id="1_adaptation"]
+[ext_resource type="Texture2D" path="res://assets/units/predatory_hunter.svg" id="2_texture"]
+
+[resource]
+script = ExtResource("1_adaptation")
+adaptation_id = "predatory_limbs"
+display_name = "Predatory Limbs"
+description = "Longer striking limbs favor speed and lethal pressure over durability."
+required_tags = PackedStringArray("biological", "hunter")
+added_tags = PackedStringArray("predatory")
+move_speed_multiplier = 1.18
+max_health_multiplier = 0.85
+attack_damage_multiplier = 1.45
+attack_cooldown_multiplier = 0.88
+radius_add = -1.0
+texture_override = ExtResource("2_texture")
+visual_size_multiplier = 1.08
