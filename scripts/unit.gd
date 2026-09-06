@@ -1,6 +1,16 @@
 class_name RTSUnit
 extends Node2D
 
+enum Intent {
+	IDLE,
+	MOVE,
+	ATTACK,
+	CHASE,
+	DEAD,
+}
+
+signal intent_changed(previous_intent: int, current_intent: int)
+
 @export var move_speed: float = 190.0
 @export var acceleration: float = 900.0
 @export var radius: float = 14.0
@@ -10,9 +20,9 @@ extends Node2D
 @export var obstacle_clearance: float = 4.0
 
 var selected: bool = false
-var target_position: Vector2
-var has_target: bool = false
 var unit_id: int = 0
+var current_intent: Intent = Intent.IDLE
+var target_position := Vector2.ZERO
 var current_velocity := Vector2.ZERO
 var navigation_path := PackedVector2Array()
 var path_index: int = 0
@@ -26,19 +36,24 @@ func set_selected(value: bool) -> void:
 	selected = value
 	queue_redraw()
 
-func set_move_target(world_position: Vector2) -> void:
+func can_receive_commands() -> bool:
+	return current_intent != Intent.DEAD
+
+func command_move_to(world_position: Vector2) -> void:
 	var fallback_path := PackedVector2Array()
 	fallback_path.append(global_position)
 	fallback_path.append(world_position)
-	set_navigation_path(fallback_path)
+	command_move_path(fallback_path)
 
-func set_navigation_path(path: PackedVector2Array) -> void:
+func command_move_path(path: PackedVector2Array) -> void:
+	if not can_receive_commands():
+		return
+
 	navigation_path = path
 	path_index = 0
 
 	if navigation_path.is_empty():
-		has_target = false
-		current_velocity = Vector2.ZERO
+		command_stop()
 		return
 
 	target_position = navigation_path[navigation_path.size() - 1]
@@ -49,18 +64,62 @@ func set_navigation_path(path: PackedVector2Array) -> void:
 	):
 		path_index += 1
 
-	has_target = path_index < navigation_path.size()
-	if not has_target:
-		current_velocity = Vector2.ZERO
+	if path_index >= navigation_path.size():
+		global_position = target_position
+		command_stop()
+		return
+
+	_set_intent(Intent.MOVE)
+	queue_redraw()
+
+func command_stop() -> void:
+	navigation_path = PackedVector2Array()
+	path_index = 0
+	target_position = global_position
+	current_velocity = Vector2.ZERO
+
+	if current_intent != Intent.DEAD:
+		_set_intent(Intent.IDLE)
 
 	queue_redraw()
 
+func mark_dead() -> void:
+	selected = false
+	navigation_path = PackedVector2Array()
+	path_index = 0
+	current_velocity = Vector2.ZERO
+	_set_intent(Intent.DEAD)
+	queue_redraw()
+
+func get_intent_name() -> String:
+	match current_intent:
+		Intent.IDLE:
+			return "IDLE"
+		Intent.MOVE:
+			return "MOVE"
+		Intent.ATTACK:
+			return "ATTACK"
+		Intent.CHASE:
+			return "CHASE"
+		Intent.DEAD:
+			return "DEAD"
+		_:
+			return "UNKNOWN"
+
+func _set_intent(next_intent: Intent) -> void:
+	if current_intent == next_intent:
+		return
+
+	var previous_intent: int = current_intent
+	current_intent = next_intent
+	intent_changed.emit(previous_intent, current_intent)
+
 func _process(delta: float) -> void:
-	if not has_target:
+	if current_intent != Intent.MOVE:
 		return
 
 	_advance_path_if_needed()
-	if not has_target:
+	if current_intent != Intent.MOVE:
 		return
 
 	var waypoint: Vector2 = navigation_path[path_index]
@@ -71,16 +130,16 @@ func _process(delta: float) -> void:
 		_advance_path_if_needed()
 		return
 
-	var desired_direction := to_waypoint.normalized()
-	var separation := _get_separation_force()
-	var steering := desired_direction + separation * separation_strength
+	var desired_direction: Vector2 = to_waypoint.normalized()
+	var separation: Vector2 = _get_separation_force()
+	var steering: Vector2 = desired_direction + separation * separation_strength
 
 	if steering == Vector2.ZERO:
 		steering = desired_direction
 	else:
 		steering = steering.normalized()
 
-	var desired_velocity := steering * move_speed
+	var desired_velocity: Vector2 = steering * move_speed
 	current_velocity = current_velocity.move_toward(desired_velocity, acceleration * delta)
 
 	if current_velocity.length() > move_speed:
@@ -93,7 +152,7 @@ func _process(delta: float) -> void:
 
 func _advance_path_if_needed() -> void:
 	while path_index < navigation_path.size():
-		var waypoint := navigation_path[path_index]
+		var waypoint: Vector2 = navigation_path[path_index]
 		if global_position.distance_to(waypoint) > waypoint_tolerance:
 			break
 		path_index += 1
@@ -101,9 +160,7 @@ func _advance_path_if_needed() -> void:
 	if path_index >= navigation_path.size():
 		if global_position.distance_to(target_position) <= waypoint_tolerance:
 			global_position = target_position
-		has_target = false
-		current_velocity = Vector2.ZERO
-		queue_redraw()
+		command_stop()
 
 func _get_separation_force() -> Vector2:
 	var force := Vector2.ZERO
@@ -113,6 +170,9 @@ func _get_separation_force() -> Vector2:
 			continue
 
 		var other := node as RTSUnit
+		if other.current_intent == Intent.DEAD:
+			continue
+
 		var offset: Vector2 = global_position - other.global_position
 		var distance: float = offset.length()
 
@@ -155,7 +215,7 @@ func _draw() -> void:
 		_draw_remaining_path()
 
 func _draw_remaining_path() -> void:
-	if not has_target or path_index >= navigation_path.size():
+	if current_intent != Intent.MOVE or path_index >= navigation_path.size():
 		return
 
 	var points := PackedVector2Array()
