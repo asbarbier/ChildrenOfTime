@@ -5,6 +5,7 @@ extends Resource
 @export var epoch: int = 1
 @export var score: int = 0
 @export var adaptations: Array[RTSAdaptationDefinition] = []
+@export var history_entries: PackedStringArray = PackedStringArray()
 
 func configure(name_value: String, epoch_value: int = 1) -> void:
 	lineage_name = name_value
@@ -12,6 +13,16 @@ func configure(name_value: String, epoch_value: int = 1) -> void:
 
 func add_score(points: int) -> void:
 	score += points
+
+func record_history(entry: String) -> void:
+	if entry.is_empty():
+		return
+	history_entries.append(entry)
+
+func get_latest_history() -> String:
+	if history_entries.is_empty():
+		return "No recorded history"
+	return history_entries[history_entries.size() - 1]
 
 func has_adaptation(adaptation_id: String) -> bool:
 	for adaptation in adaptations:
