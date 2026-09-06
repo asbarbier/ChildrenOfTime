@@ -1,10 +1,12 @@
 extends Node2D
 
-const RTSUnitScript = preload("res://scripts/unit.gd")
 const RTSObstacleScript = preload("res://scripts/obstacle.gd")
 const RTSNavigationManagerScript = preload("res://scripts/navigation_manager.gd")
 const RTSCommandControllerScript = preload("res://scripts/command_controller.gd")
 const RTSAIControllerScript = preload("res://scripts/ai_controller.gd")
+const RTSUnitFactoryScript = preload("res://scripts/unit_factory.gd")
+const RTSLineageStateScript = preload("res://scripts/lineage_state.gd")
+const PRIMITIVE_HUNTER_DEFINITION: RTSUnitDefinition = preload("res://data/units/primitive_hunter.tres")
 
 const MAP_SIZE := Vector2(3200.0, 1800.0)
 const GRID_SIZE := 64.0
@@ -23,6 +25,9 @@ var obstacles: Array[RTSObstacle] = []
 var navigation_manager: RTSNavigationManager
 var command_controller: RTSCommandController
 var ai_controller: RTSAIController
+var unit_factory: RTSUnitFactory
+var player_lineage: RTSLineageState
+var enemy_lineage: RTSLineageState
 
 var dragging_selection := false
 var drag_start_world := Vector2.ZERO
@@ -39,6 +44,8 @@ func _ready() -> void:
 	_spawn_test_obstacles()
 	_build_navigation()
 	_build_command_controller()
+	_build_lineages()
+	_build_unit_factory()
 	_spawn_test_units()
 	_build_ai_controller()
 	_build_ui()
@@ -197,6 +204,18 @@ func _build_ai_controller() -> void:
 	add_child(ai_controller)
 	ai_controller.configure(command_controller, ENEMY_TEAM_ID)
 
+func _build_lineages() -> void:
+	player_lineage = RTSLineageStateScript.new() as RTSLineageState
+	player_lineage.configure("First Lineage", 1)
+
+	enemy_lineage = RTSLineageStateScript.new() as RTSLineageState
+	enemy_lineage.configure("Rival Lineage", 1)
+
+func _build_unit_factory() -> void:
+	unit_factory = RTSUnitFactoryScript.new() as RTSUnitFactory
+	unit_factory.name = "UnitFactory"
+	add_child(unit_factory)
+
 func _spawn_test_obstacles() -> void:
 	var rock := RTSObstacleScript.new() as RTSObstacle
 	rock.name = "TheRock"
@@ -215,6 +234,7 @@ func _spawn_test_units() -> void:
 		for col in range(4):
 			_spawn_unit(
 				id_counter,
+				player_lineage,
 				PLAYER_TEAM_ID,
 				Color("87a96b"),
 				player_start + Vector2(col * spacing, row * spacing)
@@ -225,20 +245,32 @@ func _spawn_test_units() -> void:
 		for col in range(4):
 			_spawn_unit(
 				id_counter,
+				enemy_lineage,
 				ENEMY_TEAM_ID,
 				Color("b8665b"),
 				enemy_start + Vector2(col * spacing, row * spacing)
 			)
 			id_counter += 1
 
-func _spawn_unit(id_value: int, team_id: int, color: Color, position_value: Vector2) -> void:
-	var unit := RTSUnitScript.new() as RTSUnit
-	unit.name = "Unit_%02d" % id_value
-	unit.unit_id = id_value
-	unit.position = position_value
-	add_child(unit)
-	unit.configure_affiliation(team_id, color)
-	unit.configure_combat(100.0, 20.0, 72.0, 0.75)
+func _spawn_unit(
+	id_value: int,
+	lineage: RTSLineageState,
+	team_id: int,
+	color: Color,
+	position_value: Vector2
+) -> void:
+	var unit: RTSUnit = unit_factory.spawn_unit(
+		self,
+		PRIMITIVE_HUNTER_DEFINITION,
+		lineage,
+		id_value,
+		team_id,
+		color,
+		position_value
+	)
+	if unit == null:
+		return
+
 	unit.died.connect(_on_unit_died)
 	units.append(unit)
 
@@ -253,7 +285,7 @@ func _build_ui() -> void:
 
 	var panel := PanelContainer.new()
 	panel.position = Vector2(16, 16)
-	panel.custom_minimum_size = Vector2(560, 0)
+	panel.custom_minimum_size = Vector2(580, 0)
 	canvas.add_child(panel)
 
 	var margin := MarginContainer.new()
@@ -267,12 +299,12 @@ func _build_ui() -> void:
 	margin.add_child(box)
 
 	var title := Label.new()
-	title.text = "EVOLUTION RTS — PvE COMBAT PROTOTYPE"
+	title.text = "EVOLUTION RTS — LINEAGE/DATA FOUNDATION"
 	title.add_theme_font_size_override("font_size", 18)
 	box.add_child(title)
 
 	var instructions := Label.new()
-	instructions.text = "Green = player • Red = hostile AI\nDrag-select green units • Right-click ground moves • Right-click red attacks\nHostiles aggro when you approach • WASD/arrows pan • Mouse wheel zoom • R resets"
+	instructions.text = "Green = player • Red = hostile AI\nDrag-select green units • Right-click ground moves • Right-click red attacks\nUnits now spawn from UnitDefinition + LineageState through UnitFactory"
 	box.add_child(instructions)
 
 	status_label = Label.new()
@@ -293,7 +325,10 @@ func _update_status() -> void:
 		elif unit.is_on_team(ENEMY_TEAM_ID):
 			enemy_alive += 1
 
-	status_label.text = "%d selected • %d friendly alive • %d hostile alive" % [
+	status_label.text = "%s • Epoch %d • Score %d\n%d selected • %d friendly alive • %d hostile alive" % [
+		player_lineage.lineage_name,
+		player_lineage.epoch,
+		player_lineage.score,
 		selected_units.size(),
 		friendly_alive,
 		enemy_alive,
