@@ -27,11 +27,12 @@ func spawn_unit(
 	unit.position = world_position
 	parent.add_child(unit)
 
-	# The factory is the translation boundary between persistent organism data
+	# This factory is the translation boundary between persistent organism data
 	# and the runtime RTS actor. RTSUnit never needs to know about lineage history.
 	unit.move_speed = resolved_definition.move_speed
 	unit.acceleration = resolved_definition.acceleration
 	unit.radius = resolved_definition.radius
+	unit.configure_visual(resolved_definition.body_texture, resolved_definition.visual_size)
 	unit.configure_combat(
 		resolved_definition.max_health,
 		resolved_definition.attack_damage,
