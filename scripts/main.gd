@@ -4,6 +4,7 @@ const RTSUnitScript = preload("res://scripts/unit.gd")
 const RTSObstacleScript = preload("res://scripts/obstacle.gd")
 const RTSNavigationManagerScript = preload("res://scripts/navigation_manager.gd")
 const RTSCommandControllerScript = preload("res://scripts/command_controller.gd")
+const RTSAIControllerScript = preload("res://scripts/ai_controller.gd")
 
 const MAP_SIZE := Vector2(3200.0, 1800.0)
 const GRID_SIZE := 64.0
@@ -21,6 +22,7 @@ var selected_units: Array[RTSUnit] = []
 var obstacles: Array[RTSObstacle] = []
 var navigation_manager: RTSNavigationManager
 var command_controller: RTSCommandController
+var ai_controller: RTSAIController
 
 var dragging_selection := false
 var drag_start_world := Vector2.ZERO
@@ -38,6 +40,7 @@ func _ready() -> void:
 	_build_navigation()
 	_build_command_controller()
 	_spawn_test_units()
+	_build_ai_controller()
 	_build_ui()
 	queue_redraw()
 
@@ -188,6 +191,12 @@ func _build_command_controller() -> void:
 	add_child(command_controller)
 	command_controller.configure(navigation_manager, MAP_SIZE)
 
+func _build_ai_controller() -> void:
+	ai_controller = RTSAIControllerScript.new() as RTSAIController
+	ai_controller.name = "EnemyAI"
+	add_child(ai_controller)
+	ai_controller.configure(command_controller, ENEMY_TEAM_ID)
+
 func _spawn_test_obstacles() -> void:
 	var rock := RTSObstacleScript.new() as RTSObstacle
 	rock.name = "TheRock"
@@ -244,7 +253,7 @@ func _build_ui() -> void:
 
 	var panel := PanelContainer.new()
 	panel.position = Vector2(16, 16)
-	panel.custom_minimum_size = Vector2(520, 0)
+	panel.custom_minimum_size = Vector2(560, 0)
 	canvas.add_child(panel)
 
 	var margin := MarginContainer.new()
@@ -258,12 +267,12 @@ func _build_ui() -> void:
 	margin.add_child(box)
 
 	var title := Label.new()
-	title.text = "EVOLUTION RTS — FACTION/COMBAT FOUNDATION"
+	title.text = "EVOLUTION RTS — PvE COMBAT PROTOTYPE"
 	title.add_theme_font_size_override("font_size", 18)
 	box.add_child(title)
 
 	var instructions := Label.new()
-	instructions.text = "Green = player • Red = hostile\nDrag-select green units • Right-click ground moves • Right-click red attacks\nWASD/arrows pan • Mouse wheel zoom • Middle-drag camera • R resets"
+	instructions.text = "Green = player • Red = hostile AI\nDrag-select green units • Right-click ground moves • Right-click red attacks\nHostiles aggro when you approach • WASD/arrows pan • Mouse wheel zoom • R resets"
 	box.add_child(instructions)
 
 	status_label = Label.new()
