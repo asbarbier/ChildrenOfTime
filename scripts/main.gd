@@ -153,7 +153,7 @@ func _issue_move_command(world_position: Vector2) -> void:
 		)
 		var unit := selected_units[i]
 		var requested_target := _clamp_to_map(world_position + offset)
-		var path := navigation_manager.get_path(unit.global_position, requested_target)
+		var path := navigation_manager.find_navigation_path(unit.global_position, requested_target)
 
 		if path.size() >= 2:
 			unit.set_navigation_path(path)
