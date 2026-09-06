@@ -7,6 +7,9 @@ const RTSAIControllerScript = preload("res://scripts/ai_controller.gd")
 const RTSUnitFactoryScript = preload("res://scripts/unit_factory.gd")
 const RTSLineageStateScript = preload("res://scripts/lineage_state.gd")
 const PRIMITIVE_HUNTER_DEFINITION: RTSUnitDefinition = preload("res://data/units/primitive_hunter.tres")
+const RIVAL_HUNTER_DEFINITION: RTSUnitDefinition = preload("res://data/units/rival_hunter.tres")
+const CARAPACE_ADAPTATION: RTSAdaptationDefinition = preload("res://data/adaptations/carapace.tres")
+const PREDATORY_LIMBS_ADAPTATION: RTSAdaptationDefinition = preload("res://data/adaptations/predatory_limbs.tres")
 
 const MAP_SIZE := Vector2(3200.0, 1800.0)
 const GRID_SIZE := 64.0
@@ -29,16 +32,18 @@ var unit_factory: RTSUnitFactory
 var player_lineage: RTSLineageState
 var enemy_lineage: RTSLineageState
 
-var dragging_selection := false
+var dragging_selection: bool = false
 var drag_start_world := Vector2.ZERO
 var drag_current_world := Vector2.ZERO
 var drag_start_screen := Vector2.ZERO
 
-var middle_dragging := false
+var middle_dragging: bool = false
 var command_marker_position := Vector2.ZERO
-var command_marker_time := 0.0
+var command_marker_time: float = 0.0
+var adaptation_choice_made: bool = false
 
 var status_label: Label
+var adaptation_panel: PanelContainer
 
 func _ready() -> void:
 	_spawn_test_obstacles()
@@ -46,8 +51,6 @@ func _ready() -> void:
 	_build_command_controller()
 	_build_lineages()
 	_build_unit_factory()
-	_spawn_test_units()
-	_build_ai_controller()
 	_build_ui()
 	queue_redraw()
 
@@ -78,7 +81,7 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		else:
 			if dragging_selection:
 				drag_current_world = get_global_mouse_position()
-				var was_click := event.position.distance_to(drag_start_screen) < CLICK_DRAG_THRESHOLD
+				var was_click: bool = event.position.distance_to(drag_start_screen) < CLICK_DRAG_THRESHOLD
 				_finish_selection(was_click, Input.is_key_pressed(KEY_SHIFT))
 				dragging_selection = false
 				queue_redraw()
@@ -129,7 +132,7 @@ func _finish_selection(was_click: bool, additive: bool) -> void:
 
 func _find_unit_at_point(world_point: Vector2, team_filter: int = 0) -> RTSUnit:
 	var closest: RTSUnit = null
-	var closest_distance := INF
+	var closest_distance: float = INF
 
 	for unit in units:
 		if not unit.is_alive():
@@ -224,20 +227,42 @@ func _spawn_test_obstacles() -> void:
 	add_child(rock)
 	obstacles.append(rock)
 
+func _start_encounter(adaptation: RTSAdaptationDefinition) -> void:
+	if adaptation_choice_made or adaptation == null:
+		return
+
+	player_lineage.add_adaptation(adaptation)
+	adaptation_choice_made = true
+
+	if adaptation_panel != null:
+		adaptation_panel.hide()
+
+	_spawn_test_units()
+	_build_ai_controller()
+	_update_status()
+	queue_redraw()
+
+func _on_carapace_pressed() -> void:
+	_start_encounter(CARAPACE_ADAPTATION)
+
+func _on_predatory_limbs_pressed() -> void:
+	_start_encounter(PREDATORY_LIMBS_ADAPTATION)
+
 func _spawn_test_units() -> void:
-	var id_counter := 1
+	var id_counter: int = 1
 	var player_start := Vector2(540.0, 430.0)
 	var enemy_start := Vector2(1720.0, 700.0)
-	var spacing := 48.0
+	var spacing: float = 58.0
 
 	for row in range(3):
 		for col in range(4):
 			_spawn_unit(
 				id_counter,
+				PRIMITIVE_HUNTER_DEFINITION,
 				player_lineage,
 				PLAYER_TEAM_ID,
 				Color("87a96b"),
-				player_start + Vector2(col * spacing, row * spacing)
+				player_start + Vector2(float(col) * spacing, float(row) * spacing)
 			)
 			id_counter += 1
 
@@ -245,15 +270,17 @@ func _spawn_test_units() -> void:
 		for col in range(4):
 			_spawn_unit(
 				id_counter,
+				RIVAL_HUNTER_DEFINITION,
 				enemy_lineage,
 				ENEMY_TEAM_ID,
 				Color("b8665b"),
-				enemy_start + Vector2(col * spacing, row * spacing)
+				enemy_start + Vector2(float(col) * spacing, float(row) * spacing)
 			)
 			id_counter += 1
 
 func _spawn_unit(
 	id_value: int,
+	definition: RTSUnitDefinition,
 	lineage: RTSLineageState,
 	team_id: int,
 	color: Color,
@@ -261,7 +288,7 @@ func _spawn_unit(
 ) -> void:
 	var unit: RTSUnit = unit_factory.spawn_unit(
 		self,
-		PRIMITIVE_HUNTER_DEFINITION,
+		definition,
 		lineage,
 		id_value,
 		team_id,
@@ -285,7 +312,7 @@ func _build_ui() -> void:
 
 	var panel := PanelContainer.new()
 	panel.position = Vector2(16, 16)
-	panel.custom_minimum_size = Vector2(580, 0)
+	panel.custom_minimum_size = Vector2(610, 0)
 	canvas.add_child(panel)
 
 	var margin := MarginContainer.new()
@@ -299,24 +326,66 @@ func _build_ui() -> void:
 	margin.add_child(box)
 
 	var title := Label.new()
-	title.text = "EVOLUTION RTS — LINEAGE/DATA FOUNDATION"
+	title.text = "EVOLUTION RTS — FIRST ADAPTATION"
 	title.add_theme_font_size_override("font_size", 18)
 	box.add_child(title)
 
 	var instructions := Label.new()
-	instructions.text = "Green = player • Red = hostile AI\nDrag-select green units • Right-click ground moves • Right-click red attacks\nUnits now spawn from UnitDefinition + LineageState through UnitFactory"
+	instructions.text = "Choose how the First Lineage evolves, then fight the Rival Lineage.\nDrag-select • Right-click move/attack • Hostiles aggro nearby • R resets evolution"
 	box.add_child(instructions)
 
 	status_label = Label.new()
 	box.add_child(status_label)
+
+	adaptation_panel = PanelContainer.new()
+	adaptation_panel.position = Vector2(16, 150)
+	adaptation_panel.custom_minimum_size = Vector2(610, 0)
+	canvas.add_child(adaptation_panel)
+
+	var adaptation_margin := MarginContainer.new()
+	adaptation_margin.add_theme_constant_override("margin_left", 14)
+	adaptation_margin.add_theme_constant_override("margin_right", 14)
+	adaptation_margin.add_theme_constant_override("margin_top", 12)
+	adaptation_margin.add_theme_constant_override("margin_bottom", 12)
+	adaptation_panel.add_child(adaptation_margin)
+
+	var adaptation_box := VBoxContainer.new()
+	adaptation_box.add_theme_constant_override("separation", 8)
+	adaptation_margin.add_child(adaptation_box)
+
+	var choice_title := Label.new()
+	choice_title.text = "ADAPTIVE PRESSURE: Rival hunters occupy the eastern basin."
+	choice_title.add_theme_font_size_override("font_size", 16)
+	adaptation_box.add_child(choice_title)
+
+	var choice_prompt := Label.new()
+	choice_prompt.text = "What does your lineage become?"
+	adaptation_box.add_child(choice_prompt)
+
+	var choices := HBoxContainer.new()
+	choices.add_theme_constant_override("separation", 10)
+	adaptation_box.add_child(choices)
+
+	var carapace_button := Button.new()
+	carapace_button.text = "HARDENED CARAPACE\n150 HP • 156 speed • armored"
+	carapace_button.custom_minimum_size = Vector2(285, 70)
+	carapace_button.pressed.connect(_on_carapace_pressed)
+	choices.add_child(carapace_button)
+
+	var predatory_button := Button.new()
+	predatory_button.text = "PREDATORY LIMBS\n85 HP • 29 damage • 224 speed"
+	predatory_button.custom_minimum_size = Vector2(285, 70)
+	predatory_button.pressed.connect(_on_predatory_limbs_pressed)
+	choices.add_child(predatory_button)
+
 	_update_status()
 
 func _update_status() -> void:
 	if status_label == null:
 		return
 
-	var friendly_alive := 0
-	var enemy_alive := 0
+	var friendly_alive: int = 0
+	var enemy_alive: int = 0
 	for unit in units:
 		if not unit.is_alive():
 			continue
@@ -325,9 +394,11 @@ func _update_status() -> void:
 		elif unit.is_on_team(ENEMY_TEAM_ID):
 			enemy_alive += 1
 
-	status_label.text = "%s • Epoch %d • Score %d\n%d selected • %d friendly alive • %d hostile alive" % [
+	var adaptation_summary: String = player_lineage.get_adaptation_summary()
+	status_label.text = "%s • Epoch %d • Evolution: %s • Score %d\n%d selected • %d friendly alive • %d hostile alive" % [
 		player_lineage.lineage_name,
 		player_lineage.epoch,
+		adaptation_summary,
 		player_lineage.score,
 		selected_units.size(),
 		friendly_alive,
@@ -364,22 +435,19 @@ func _clamp_to_map(point: Vector2) -> Vector2:
 	)
 
 func _draw() -> void:
-	# Playfield background.
 	draw_rect(Rect2(Vector2.ZERO, MAP_SIZE), Color("152019"), true)
 
-	# Coarse terrain/grid placeholder so movement and camera scale are readable.
 	var grid_color := Color("243329")
-	var x := 0.0
+	var x: float = 0.0
 	while x <= MAP_SIZE.x:
 		draw_line(Vector2(x, 0), Vector2(x, MAP_SIZE.y), grid_color, 1.0)
 		x += GRID_SIZE
 
-	var y := 0.0
+	var y: float = 0.0
 	while y <= MAP_SIZE.y:
 		draw_line(Vector2(0, y), Vector2(MAP_SIZE.x, y), grid_color, 1.0)
 		y += GRID_SIZE
 
-	# Map edge.
 	draw_rect(Rect2(Vector2.ZERO, MAP_SIZE), Color("526353"), false, 3.0)
 
 	if dragging_selection:
