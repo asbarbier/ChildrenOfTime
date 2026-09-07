@@ -7,6 +7,7 @@ const RTSAIControllerScript = preload("res://scripts/ai_controller.gd")
 const RTSUnitFactoryScript = preload("res://scripts/unit_factory.gd")
 const RTSLineageStateScript = preload("res://scripts/lineage_state.gd")
 const RTSEncounterControllerScript = preload("res://scripts/encounter_controller.gd")
+const RTSMacroStateScript = preload("res://scripts/macro_state.gd")
 const PRIMITIVE_HUNTER_DEFINITION: RTSUnitDefinition = preload("res://data/units/primitive_hunter.tres")
 const RIVAL_HUNTER_DEFINITION: RTSUnitDefinition = preload("res://data/units/rival_hunter.tres")
 const CARAPACE_ADAPTATION: RTSAdaptationDefinition = preload("res://data/adaptations/carapace.tres")
@@ -21,6 +22,13 @@ const CLICK_DRAG_THRESHOLD := 8.0
 const PLAYER_TEAM_ID := 1
 const ENEMY_TEAM_ID := 2
 
+enum GamePhase {
+	MACRO,
+	ADAPTATION,
+	TACTICAL,
+	RESULT,
+}
+
 @onready var camera: Camera2D = $Camera2D
 
 var units: Array[RTSUnit] = []
@@ -33,7 +41,9 @@ var unit_factory: RTSUnitFactory
 var encounter_controller: RTSEncounterController
 var player_lineage: RTSLineageState
 var enemy_lineage: RTSLineageState
+var macro_state: RTSMacroState
 
+var phase: GamePhase = GamePhase.MACRO
 var dragging_selection: bool = false
 var drag_start_world := Vector2.ZERO
 var drag_current_world := Vector2.ZERO
@@ -45,34 +55,48 @@ var command_marker_time: float = 0.0
 var adaptation_choice_made: bool = false
 
 var status_label: Label
+var macro_panel: PanelContainer
+var macro_summary_label: Label
+var macro_home_button: Button
+var macro_glass_button: Button
+var macro_east_button: Button
 var adaptation_panel: PanelContainer
 var result_panel: PanelContainer
 var result_label: Label
+var result_return_button: Button
 
 func _ready() -> void:
 	_spawn_test_obstacles()
 	_build_navigation()
 	_build_command_controller()
 	_build_lineages()
+	_build_macro_state()
 	_build_unit_factory()
 	_build_ui()
+	_show_macro_board()
 	queue_redraw()
 
 func _process(delta: float) -> void:
-	_update_camera_keyboard(delta)
+	if phase == GamePhase.TACTICAL:
+		_update_camera_keyboard(delta)
 
 	if command_marker_time > 0.0:
-		command_marker_time -= delta
+		command_marker_time = maxf(0.0, command_marker_time - delta)
 		queue_redraw()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_R:
+			get_tree().reload_current_scene()
+		return
+
+	if phase != GamePhase.TACTICAL:
+		return
+
 	if event is InputEventMouseButton:
 		_handle_mouse_button(event)
 	elif event is InputEventMouseMotion:
 		_handle_mouse_motion(event)
-	elif event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_R:
-			get_tree().reload_current_scene()
 
 func _handle_mouse_button(event: InputEventMouseButton) -> void:
 	if event.button_index == MOUSE_BUTTON_LEFT:
@@ -230,6 +254,10 @@ func _build_lineages() -> void:
 	enemy_lineage = RTSLineageStateScript.new() as RTSLineageState
 	enemy_lineage.configure("Rival Lineage", 1)
 
+func _build_macro_state() -> void:
+	macro_state = RTSMacroStateScript.new() as RTSMacroState
+	macro_state.configure_epoch_one()
+
 func _build_unit_factory() -> void:
 	unit_factory = RTSUnitFactoryScript.new() as RTSUnitFactory
 	unit_factory.name = "UnitFactory"
@@ -243,16 +271,26 @@ func _spawn_test_obstacles() -> void:
 	add_child(rock)
 	obstacles.append(rock)
 
+func _on_eastern_basin_pressed() -> void:
+	if phase != GamePhase.MACRO:
+		return
+	if not macro_state.can_begin_encounter(RTSMacroState.EASTERN_BASIN_ID):
+		return
+
+	phase = GamePhase.ADAPTATION
+	macro_panel.hide()
+	adaptation_panel.show()
+	_update_status()
+
 func _start_encounter(adaptation: RTSAdaptationDefinition) -> void:
-	if adaptation_choice_made or adaptation == null:
+	if phase != GamePhase.ADAPTATION or adaptation_choice_made or adaptation == null:
 		return
 
 	player_lineage.add_adaptation(adaptation)
 	adaptation_choice_made = true
+	phase = GamePhase.TACTICAL
 
-	if adaptation_panel != null:
-		adaptation_panel.hide()
-
+	adaptation_panel.hide()
 	_spawn_test_units()
 	_build_ai_controller()
 	_build_encounter_controller()
@@ -323,7 +361,13 @@ func _on_unit_died(unit: RTSUnit) -> void:
 	_update_status()
 
 func _on_encounter_finished(victory: bool, report: Dictionary) -> void:
+	phase = GamePhase.RESULT
 	_clear_selection()
+	macro_state.apply_encounter_result(RTSMacroState.EASTERN_BASIN_ID, victory)
+
+	if ai_controller != null and is_instance_valid(ai_controller):
+		ai_controller.set_process(false)
+
 	_update_status()
 
 	if result_panel == null or result_label == null:
@@ -341,8 +385,9 @@ func _on_encounter_finished(victory: bool, report: Dictionary) -> void:
 	var encounter_score: int = int(report.get("encounter_score", 0))
 	var lineage_score: int = int(report.get("lineage_score", player_lineage.score))
 	var outcome_title: String = "EPOCH ENCOUNTER SURVIVED" if victory else "LINEAGE COLLAPSED"
+	var world_consequence: String = "Eastern Basin becomes lineage territory." if victory else "Eastern Basin is lost. No expansion lineage returns."
 
-	result_label.text = "%s\n\nEastern Basin • %.1f seconds\nRivals defeated: %d / %d    +%d\nLineage survivors: %d / %d    +%d\nTempo bonus: +%d\nSurvival victory: +%d\n\nENCOUNTER SCORE: +%d\nLINEAGE SCORE: %d\n\nHistory: %s\n\nPress R to begin another lineage." % [
+	result_label.text = "%s\n\nEastern Basin • %.1f seconds\nRivals defeated: %d / %d    +%d\nLineage survivors: %d / %d    +%d\nTempo bonus: +%d\nSurvival victory: +%d\n\nENCOUNTER SCORE: +%d\nLINEAGE SCORE: %d\n\nHistory: %s\n\nWORLD CONSEQUENCE: %s" % [
 		outcome_title,
 		elapsed_seconds,
 		hostiles_defeated,
@@ -356,8 +401,89 @@ func _on_encounter_finished(victory: bool, report: Dictionary) -> void:
 		encounter_score,
 		lineage_score,
 		player_lineage.get_latest_history(),
+		world_consequence,
 	]
+	result_return_button.text = "RETURN TO HISTORY"
 	result_panel.show()
+
+func _on_return_to_history_pressed() -> void:
+	if phase != GamePhase.RESULT:
+		return
+
+	if macro_state.run_ended:
+		player_lineage.record_history(
+			"Deep Time: The First Lineage ends after the failed Eastern Basin expansion."
+		)
+	else:
+		player_lineage.record_history(
+			"Deep Time: Eastern Basin secured. 1,200 years pass and the lineage endures."
+		)
+
+	_cleanup_encounter()
+	result_panel.hide()
+	phase = GamePhase.MACRO
+	_show_macro_board()
+
+func _cleanup_encounter() -> void:
+	_clear_selection()
+
+	for unit in units:
+		if unit != null and is_instance_valid(unit):
+			unit.queue_free()
+	units.clear()
+
+	if ai_controller != null and is_instance_valid(ai_controller):
+		ai_controller.queue_free()
+	ai_controller = null
+
+	if encounter_controller != null and is_instance_valid(encounter_controller):
+		encounter_controller.queue_free()
+	encounter_controller = null
+
+	dragging_selection = false
+	middle_dragging = false
+	command_marker_time = 0.0
+
+func _show_macro_board() -> void:
+	phase = GamePhase.MACRO
+	adaptation_panel.hide()
+	result_panel.hide()
+	_refresh_macro_board()
+	macro_panel.show()
+	_update_status()
+
+func _refresh_macro_board() -> void:
+	if macro_state == null or macro_summary_label == null:
+		return
+
+	var home: RTSMacroRegionState = macro_state.get_region(RTSMacroState.CRADLE_NEST_ID)
+	var glass: RTSMacroRegionState = macro_state.get_region(RTSMacroState.GLASS_FOREST_ID)
+	var east: RTSMacroRegionState = macro_state.get_region(RTSMacroState.EASTERN_BASIN_ID)
+
+	if home != null:
+		macro_home_button.text = "CRADLE NEST\n[%s]\nAncestral territory" % home.get_status_name()
+	if glass != null:
+		macro_glass_button.text = "GLASS FOREST\n[%s]\nUnmapped western biome" % glass.get_status_name()
+	if east != null:
+		var east_action: String = "Expand here" if east.status == RTSMacroRegionState.Status.CONTESTED else "Historical result recorded"
+		macro_east_button.text = "EASTERN BASIN\n[%s]\n%s" % [east.get_status_name(), east_action]
+		macro_east_button.disabled = not macro_state.can_begin_encounter(RTSMacroState.EASTERN_BASIN_ID)
+
+	if macro_state.run_ended:
+		macro_summary_label.text = "Turn %d • ~%d years since emergence\nThe First Lineage is extinct. Its history and score remain; the run is over.\nPress R to begin a new lineage." % [
+			macro_state.current_turn,
+			macro_state.elapsed_years,
+		]
+	elif east != null and east.status == RTSMacroRegionState.Status.SECURED:
+		macro_summary_label.text = "Turn %d • ~%d years since emergence\nEastern Basin is now lineage territory. The world changed because of the RTS result.\nMACRO ↔ TACTICAL LOOP PROVEN. Press R to replay the proof." % [
+			macro_state.current_turn,
+			macro_state.elapsed_years,
+		]
+	else:
+		macro_summary_label.text = "Turn %d • ~%d years since emergence\nThe lineage holds one basin. Rival hunters block the rich eastern hunting grounds.\nChoose a historical expansion, adapt to its pressure, and survive the moment." % [
+			macro_state.current_turn,
+			macro_state.elapsed_years,
+		]
 
 func _build_ui() -> void:
 	var canvas := CanvasLayer.new()
@@ -366,7 +492,7 @@ func _build_ui() -> void:
 
 	var panel := PanelContainer.new()
 	panel.position = Vector2(16, 16)
-	panel.custom_minimum_size = Vector2(610, 0)
+	panel.custom_minimum_size = Vector2(760, 0)
 	canvas.add_child(panel)
 
 	var margin := MarginContainer.new()
@@ -380,20 +506,74 @@ func _build_ui() -> void:
 	margin.add_child(box)
 
 	var title := Label.new()
-	title.text = "EVOLUTION RTS — ENCOUNTER SCORE"
+	title.text = "EVOLUTION RTS — HISTORY / TACTICAL LOOP"
 	title.add_theme_font_size_override("font_size", 18)
 	box.add_child(title)
 
 	var instructions := Label.new()
-	instructions.text = "Choose an adaptation, survive the eastern basin, and turn the result into lineage history.\nDrag-select • Right-click move/attack • Hostiles aggro nearby • R starts a new lineage"
+	instructions.text = "Macro history chooses the pressure • Evolution changes the organism • RTS decides the consequence\nDuring battle: drag-select • right-click move/attack • R restarts the lineage"
 	box.add_child(instructions)
 
 	status_label = Label.new()
 	box.add_child(status_label)
 
+	_build_macro_ui(canvas)
+	_build_adaptation_ui(canvas)
+	_build_result_ui(canvas)
+	_update_status()
+
+func _build_macro_ui(canvas: CanvasLayer) -> void:
+	macro_panel = PanelContainer.new()
+	macro_panel.position = Vector2(16, 150)
+	macro_panel.custom_minimum_size = Vector2(760, 0)
+	canvas.add_child(macro_panel)
+
+	var macro_margin := MarginContainer.new()
+	macro_margin.add_theme_constant_override("margin_left", 16)
+	macro_margin.add_theme_constant_override("margin_right", 16)
+	macro_margin.add_theme_constant_override("margin_top", 14)
+	macro_margin.add_theme_constant_override("margin_bottom", 14)
+	macro_panel.add_child(macro_margin)
+
+	var macro_box := VBoxContainer.new()
+	macro_box.add_theme_constant_override("separation", 10)
+	macro_margin.add_child(macro_box)
+
+	var macro_title := Label.new()
+	macro_title.text = "EPOCH I — EMERGENCE"
+	macro_title.add_theme_font_size_override("font_size", 20)
+	macro_box.add_child(macro_title)
+
+	macro_summary_label = Label.new()
+	macro_box.add_child(macro_summary_label)
+
+	var region_row := HBoxContainer.new()
+	region_row.add_theme_constant_override("separation", 10)
+	macro_box.add_child(region_row)
+
+	macro_home_button = Button.new()
+	macro_home_button.custom_minimum_size = Vector2(235, 105)
+	macro_home_button.disabled = true
+	region_row.add_child(macro_home_button)
+
+	macro_glass_button = Button.new()
+	macro_glass_button.custom_minimum_size = Vector2(235, 105)
+	macro_glass_button.disabled = true
+	region_row.add_child(macro_glass_button)
+
+	macro_east_button = Button.new()
+	macro_east_button.custom_minimum_size = Vector2(235, 105)
+	macro_east_button.pressed.connect(_on_eastern_basin_pressed)
+	region_row.add_child(macro_east_button)
+
+	var macro_hint := Label.new()
+	macro_hint.text = "Build 12 proof: only the Eastern Basin is actionable. The Glass Forest stays unknown on purpose."
+	macro_box.add_child(macro_hint)
+
+func _build_adaptation_ui(canvas: CanvasLayer) -> void:
 	adaptation_panel = PanelContainer.new()
 	adaptation_panel.position = Vector2(16, 150)
-	adaptation_panel.custom_minimum_size = Vector2(610, 0)
+	adaptation_panel.custom_minimum_size = Vector2(760, 0)
 	canvas.add_child(adaptation_panel)
 
 	var adaptation_margin := MarginContainer.new()
@@ -408,12 +588,12 @@ func _build_ui() -> void:
 	adaptation_margin.add_child(adaptation_box)
 
 	var choice_title := Label.new()
-	choice_title.text = "ADAPTIVE PRESSURE: Rival hunters occupy the eastern basin."
-	choice_title.add_theme_font_size_override("font_size", 16)
+	choice_title.text = "EASTERN BASIN — ADAPTIVE PRESSURE"
+	choice_title.add_theme_font_size_override("font_size", 18)
 	adaptation_box.add_child(choice_title)
 
 	var choice_prompt := Label.new()
-	choice_prompt.text = "What does your lineage become?"
+	choice_prompt.text = "Rival hunters dominate the basin. What does your lineage become before the expansion becomes history?"
 	adaptation_box.add_child(choice_prompt)
 
 	var choices := HBoxContainer.new()
@@ -422,19 +602,22 @@ func _build_ui() -> void:
 
 	var carapace_button := Button.new()
 	carapace_button.text = "HARDENED CARAPACE\n150 HP • 156 speed • armored"
-	carapace_button.custom_minimum_size = Vector2(285, 70)
+	carapace_button.custom_minimum_size = Vector2(350, 80)
 	carapace_button.pressed.connect(_on_carapace_pressed)
 	choices.add_child(carapace_button)
 
 	var predatory_button := Button.new()
 	predatory_button.text = "PREDATORY LIMBS\n85 HP • 29 damage • 224 speed"
-	predatory_button.custom_minimum_size = Vector2(285, 70)
+	predatory_button.custom_minimum_size = Vector2(350, 80)
 	predatory_button.pressed.connect(_on_predatory_limbs_pressed)
 	choices.add_child(predatory_button)
 
+	adaptation_panel.hide()
+
+func _build_result_ui(canvas: CanvasLayer) -> void:
 	result_panel = PanelContainer.new()
 	result_panel.position = Vector2(16, 150)
-	result_panel.custom_minimum_size = Vector2(610, 0)
+	result_panel.custom_minimum_size = Vector2(760, 0)
 	canvas.add_child(result_panel)
 
 	var result_margin := MarginContainer.new()
@@ -444,36 +627,63 @@ func _build_ui() -> void:
 	result_margin.add_theme_constant_override("margin_bottom", 14)
 	result_panel.add_child(result_margin)
 
+	var result_box := VBoxContainer.new()
+	result_box.add_theme_constant_override("separation", 10)
+	result_margin.add_child(result_box)
+
 	result_label = Label.new()
 	result_label.add_theme_font_size_override("font_size", 15)
-	result_margin.add_child(result_label)
+	result_box.add_child(result_label)
+
+	result_return_button = Button.new()
+	result_return_button.custom_minimum_size = Vector2(0, 48)
+	result_return_button.pressed.connect(_on_return_to_history_pressed)
+	result_box.add_child(result_return_button)
+
 	result_panel.hide()
 
-	_update_status()
-
 func _update_status() -> void:
-	if status_label == null:
+	if status_label == null or player_lineage == null:
 		return
 
-	var friendly_alive: int = 0
-	var enemy_alive: int = 0
-	for unit in units:
-		if not unit.is_alive():
-			continue
-		if unit.is_on_team(PLAYER_TEAM_ID):
-			friendly_alive += 1
-		elif unit.is_on_team(ENEMY_TEAM_ID):
-			enemy_alive += 1
-
 	var adaptation_summary: String = player_lineage.get_adaptation_summary()
-	status_label.text = "%s • Epoch %d • Evolution: %s • Score %d\n%d selected • %d friendly alive • %d hostile alive" % [
+
+	if phase == GamePhase.TACTICAL:
+		var friendly_alive: int = 0
+		var enemy_alive: int = 0
+		for unit in units:
+			if not unit.is_alive():
+				continue
+			if unit.is_on_team(PLAYER_TEAM_ID):
+				friendly_alive += 1
+			elif unit.is_on_team(ENEMY_TEAM_ID):
+				enemy_alive += 1
+
+		status_label.text = "%s • Epoch %d • Evolution: %s • Score %d\n%d selected • %d friendly alive • %d hostile alive" % [
+			player_lineage.lineage_name,
+			player_lineage.epoch,
+			adaptation_summary,
+			player_lineage.score,
+			selected_units.size(),
+			friendly_alive,
+			enemy_alive,
+		]
+		return
+
+	var phase_name: String = "HISTORY"
+	if phase == GamePhase.ADAPTATION:
+		phase_name = "ADAPTATION"
+	elif phase == GamePhase.RESULT:
+		phase_name = "CONSEQUENCE"
+
+	status_label.text = "%s • Epoch %d • Turn %d • ~%d years • %s\nEvolution: %s • Score %d" % [
 		player_lineage.lineage_name,
 		player_lineage.epoch,
+		macro_state.current_turn,
+		macro_state.elapsed_years,
+		phase_name,
 		adaptation_summary,
 		player_lineage.score,
-		selected_units.size(),
-		friendly_alive,
-		enemy_alive,
 	]
 
 func _update_camera_keyboard(delta: float) -> void:
@@ -521,12 +731,12 @@ func _draw() -> void:
 
 	draw_rect(Rect2(Vector2.ZERO, MAP_SIZE), Color("526353"), false, 3.0)
 
-	if dragging_selection:
+	if phase == GamePhase.TACTICAL and dragging_selection:
 		var rect := Rect2(drag_start_world, drag_current_world - drag_start_world).abs()
 		draw_rect(rect, Color(0.9, 0.85, 0.35, 0.12), true)
 		draw_rect(rect, Color("f0d96b"), false, 2.0)
 
-	if command_marker_time > 0.0:
+	if phase == GamePhase.TACTICAL and command_marker_time > 0.0:
 		var alpha: float = clampf(command_marker_time / 0.7, 0.0, 1.0)
 		draw_arc(command_marker_position, 18.0, 0.0, TAU, 24, Color(0.95, 0.85, 0.35, alpha), 3.0)
 		draw_line(command_marker_position + Vector2(-8, 0), command_marker_position + Vector2(8, 0), Color(0.95, 0.85, 0.35, alpha), 2.0)
